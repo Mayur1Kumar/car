@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Traffic Escape Mobile</title>
+    <style>
+        :root {
+            --bg-color: #a2e635;
+            --ui-green: #4a631d;
+            --road-grey: #333;
+        }
+        * {
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+            -webkit-user-select: none;
+            outline: none;
+        }
+        body {
+            margin: 0; padding: 0;
+            display: flex; justify-content: center; align-items: center;
+            height: 100vh; background-color: var(--bg-color);
+            font-family: 'Arial Rounded MT Bold', sans-serif;
+            overflow: hidden; touch-action: none;
+        }
+        canvas { display: block; }
+
+        #rotate-overlay {
+            display: none;
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--ui-green); color: white;
+            z-index: 100; flex-direction: column;
+            justify-content: center; align-items: center; text-align: center;
+        }
+        @media (orientation: landscape) and (max-height: 500px) {
+            #rotate-overlay { display: flex; }
+        }
+
+        #ui {
+            position: absolute; top: 40px; width: 100%;
+            display: none; flex-direction: column; align-items: center;
+            pointer-events: none; z-index: 10;
+        }
+        .badge {
+            background: var(--ui-green); color: white;
+            padding: 12px 40px; border-radius: 30px;
+            font-weight: bold; font-size: 26px;
+            box-shadow: 0 6px rgba(0,0,0,0.2);
+        }
+
+        #home {
+            position: absolute; 
+            top: 0; left: 0;
+            width: 100vw; 
+            height: 100vh;
+            background: var(--bg-color);
+            z-index: 20;
+            cursor: pointer;
+            overflow: hidden;
+        }
+        
+        .home-logo {
+            width: 100%;
+            height: 100%;
+            object-fit: fill;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="rotate-overlay">
+        <h1>🔄</h1>
+        <p>Please Rotate Your Device<br>to Portrait Mode</p>
+    </div>
+
+    <div id="home" onclick="startGame()">
+        <img src="home.png" alt="Start Game" class="home-logo">
+    </div>
+
+    <div id="ui">
+        <div class="badge" id="lvl-txt">Level 1</div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Game State Variables
+    let level = 1;
+    let score = 0; // Added score variable
+    let cars = [];
+    let gameRunning = false;
+    const ROAD_W = 90;
+    const CAR_W = 70; 
+    const CAR_H = 40; 
+    const MOVE_SPEED = 6;
+
+    // Audio Assets
+    const sndMove = new Audio('move.mp3');
+    const sndHorn = new Audio('horn.wav');
+
+    function playSfx(audio) {
+        const clone = audio.cloneNode();
+        clone.play().catch(e => {});
+        return clone;
+    }
+
+    // Score Function
+    function addScore(points) {
+        score += points;
+        console.log("Current Score: " + score);
+    }
+
+    // Image Assets
+    const carImages = {};
+    const carColors = ['Red', 'Blue'];
+    let imagesLoaded = 0;
+
+    const backgroundImg = new Image();
+    backgroundImg.src = 'back.png';
+
+    carColors.forEach(color => {
+        const img = new Image();
+        img.src = `C${color}.png`;
+        img.onload = () => { imagesLoaded++; };
+        carImages[color] = img;
+    });
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+
+    class Car {
+        constructor(x, y, dir, id, willTurn = false) {
+            this.id = id;
+            this.startX = x; this.startY = y;
+            this.x = x; this.y = y;
+            this.dir = dir; 
+            this.willTurn = willTurn;
+            this.state = 'idle';
+            this.activeMoveSnd = null; 
+            
+            const cfg = {
+                'up': {ang: -Math.PI/2},
+                'down': {ang: Math.PI/2},
+                'left': {ang: Math.PI},
+                'right': {ang: 0}
+            };
+            
+            this.angle = cfg[dir].ang;
+            this.startAngle = this.angle;
+            this.updateVectors();
+            this.image = carImages[carColors[Math.floor(Math.random() * carColors.length)]];
+        }
+
+        updateVectors() {
+            this.moveDir = { x: Math.cos(this.angle), y: Math.sin(this.angle) };
+        }
+
+        draw() {
+            if (this.state === 'escaped') return;
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.angle);
+            
+            if (this.image && this.image.complete) {
+                ctx.drawImage(this.image, -CAR_W/2, -CAR_H/2, CAR_W, CAR_H);
+            } else {
+                ctx.fillStyle = '#666';
+                ctx.beginPath(); 
+                ctx.roundRect(-CAR_W/2, -CAR_H/2, CAR_W, CAR_H, 10); 
+                ctx.fill();
+            }
+            
+            ctx.strokeStyle = 'white'; 
+            ctx.lineWidth = 3; 
+            ctx.lineCap = 'round'; 
+            ctx.lineJoin = 'round';
+            
+            ctx.beginPath(); 
+            if (this.willTurn) {
+                ctx.moveTo(-10, 5);
+                ctx.lineTo(4, 5);
+                ctx.quadraticCurveTo(10, 5, 10, 0);
+                ctx.lineTo(10, -8);
+                ctx.moveTo(6, -5); ctx.lineTo(10, -11); ctx.lineTo(14, -5);
+            } else {
+                ctx.moveTo(-8, 0); ctx.lineTo(8, 0);
+                ctx.moveTo(2, -6); ctx.lineTo(10, 0); ctx.lineTo(2, 6);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        update() {
+            const cx = canvas.width/2;
+            const cy = canvas.height/2;
+
+            if (['moving', 'approach', 'turning', 'exiting'].includes(this.state)) {
+                if (this.willTurn && (this.state === 'moving' || this.state === 'approach')) {
+                    this.state = 'approach';
+                    let dToC = Math.hypot(this.x - cx, this.y - cy);
+                    if (dToC < MOVE_SPEED) {
+                        this.x = cx; this.y = cy; 
+                        this.state = 'turning';
+                        return;
+                    }
+                }
+
+                if (this.state === 'turning') {
+                    let target = this.startAngle - Math.PI/2;
+                    if (Math.abs(this.angle - target) > 0.1) {
+                        this.angle -= 0.15;
+                        this.updateVectors();
+                    } else {
+                        this.angle = target;
+                        this.updateVectors();
+                        this.state = 'exiting';
+                    }
+                    return;
+                }
+
+                this.x += this.moveDir.x * MOVE_SPEED;
+                this.y += this.moveDir.y * MOVE_SPEED;
+
+                for (let other of cars) {
+                    if (other.id !== this.id && other.state !== 'escaped') {
+                        if (Math.hypot(this.x - other.x, this.y - other.y) < 65) {
+                            if (this.activeMoveSnd) {
+                                this.activeMoveSnd.pause();
+                                this.activeMoveSnd = null;
+                            }
+                            playSfx(sndHorn); 
+                            this.state = 'returning';
+                        }
+                    }
+                }
+
+                if (this.x < -100 || this.x > canvas.width+100 || this.y < -100 || this.y > canvas.height+100) {
+                    this.state = 'escaped';
+                    this.activeMoveSnd = null;
+                    addScore(2); // Award points on escape
+                    checkWin();
+                }
+            } else if (this.state === 'returning') {
+                this.angle = this.startAngle;
+                this.updateVectors();
+                let dist = Math.hypot(this.startX - this.x, this.startY - this.y);
+                if (dist < MOVE_SPEED * 1.5) { 
+                    this.x = this.startX; this.y = this.startY; 
+                    this.state = 'idle'; 
+                } else {
+                    this.x += ((this.startX - this.x)/dist) * MOVE_SPEED * 1.5;
+                    this.y += ((this.startY - this.y)/dist) * MOVE_SPEED * 1.5;
+                }
+            }
+        }
+    }
+
+    function drawRoads() {
+        const cx = canvas.width/2; 
+        const cy = canvas.height/2;
+        ctx.fillStyle = '#333';
+        ctx.fillRect(cx - ROAD_W/2, 0, ROAD_W, canvas.height); 
+        ctx.fillRect(0, cy - ROAD_W/2, canvas.width, ROAD_W);
+    }
+
+    function generateLevel(lvl) {
+        cars = [];
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2;
+        document.getElementById('lvl-txt').innerText = "Level " + lvl;
+        
+        if(lvl > 1) playSfx(sndHorn);
+
+        const slotsH = [cx - 165, cx - 80, cx + 80, cx + 165];
+        const slotsV = [cy - 165, cy - 80, cy + 80, cy + 165];
+
+        if (lvl === 1) {
+            cars.push(new Car(slotsH[1], cy, 'left', 0), new Car(slotsH[2], cy, 'right', 1));
+        } else if (lvl === 2) {
+            cars.push(new Car(slotsH[1], cy, 'left', 0), new Car(slotsH[2], cy, 'right', 1),
+                      new Car(cx, slotsV[1], 'up', 2), new Car(cx, slotsV[2], 'down', 3));
+        } else if (lvl === 3) {
+            cars.push(new Car(slotsH[1], cy, 'left', 0)); 
+            cars.push(new Car(slotsH[2], cy, 'left', 1, true)); 
+            cars.push(new Car(cx, slotsV[1], 'up', 2)); 
+            cars.push(new Car(cx, slotsV[2], 'down', 3)); 
+        } else {
+            let id = 0;
+            const lanes = [
+                { name: 'left',   slots: [{x: slotsH[1], y: cy, type: 'inner'}, {x: slotsH[0], y: cy, type: 'outer'}], inDir: 'right', outDir: 'left', mode: 'turner' },
+                { name: 'top',    slots: [{x: cx, y: slotsV[1], type: 'inner'}, {x: cx, y: slotsV[0], type: 'outer'}], inDir: 'down',  outDir: 'up',   mode: 'clear' },
+                { name: 'right',  slots: [{x: slotsH[2], y: cy, type: 'inner'}, {x: slotsH[3], y: cy, type: 'outer'}], inDir: 'left',  outDir: 'right', mode: 'mixed' },
+                { name: 'bottom', slots: [{x: cx, y: slotsV[2], type: 'inner'}, {x: cx, y: slotsV[3], type: 'outer'}], inDir: 'up',    outDir: 'down',  mode: 'turner' }
+            ];
+
+            lanes.forEach(lane => {
+                lane.slots.forEach(slot => {
+                    let shouldPlace = Math.random() > 0.2;
+                    if (!shouldPlace) return;
+                    let finalDir, isTurn = false;
+                    if (lane.mode === 'turner') {
+                        if (slot.type === 'inner') { finalDir = lane.inDir; isTurn = true; } 
+                        else { finalDir = lane.outDir; isTurn = false; }
+                    } else if (lane.mode === 'clear') {
+                        finalDir = lane.outDir; isTurn = false;
+                    } else if (lane.mode === 'mixed') {
+                        let typeRand = Math.random();
+                        if (typeRand > 0.5 && slot.type === 'inner') { finalDir = lane.inDir; isTurn = true; } 
+                        else { finalDir = lane.outDir; isTurn = false; }
+                    }
+                    cars.push(new Car(slot.x, slot.y, finalDir, id++, isTurn));
+                });
+            });
+            if (cars.length === 0) generateLevel(lvl);
+        }
+    }
+
+    function startGame() {
+        document.getElementById('home').style.display = 'none';
+        document.getElementById('ui').style.display = 'flex';
+        level = 1; 
+        score = 0; // Reset score when game starts
+        generateLevel(level); 
+        gameRunning = true;
+    }
+
+    function checkWin() {
+        if (cars.every(c => c.state === 'escaped')) {
+            setTimeout(() => { level++; generateLevel(level); }, 600);
+        }
+    }
+
+    function loop() {
+        ctx.clearRect(0,0,canvas.width, canvas.height);
+        if (gameRunning) {
+            drawRoads();
+
+            if (backgroundImg.complete) {
+                const canvasAspect = canvas.width / canvas.height;
+                const imgAspect = backgroundImg.width / backgroundImg.height;
+                let drawW, drawH, drawX, drawY;
+
+                if (canvasAspect > imgAspect) {
+                    drawW = canvas.width;
+                    drawH = canvas.width / imgAspect;
+                    drawX = 0;
+                    drawY = (canvas.height - drawH) / 2;
+                } else {
+                    drawW = canvas.height * imgAspect;
+                    drawH = canvas.height;
+                    drawX = (canvas.width - drawW) / 2;
+                    drawY = 0;
+                }
+                ctx.drawImage(backgroundImg, drawX, drawY, drawW, drawH);
+            }
+
+            cars.sort((a,b) => a.y - b.y).forEach(c => { c.update(); c.draw(); });
+        }
+        requestAnimationFrame(loop);
+    }
+
+    const handleInput = (e) => {
+        if(!gameRunning) return;
+        const rect = canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const mx = clientX - rect.left;
+        const my = clientY - rect.top;
+        cars.forEach(c => {
+            if (c.state === 'idle' && Math.hypot(mx - c.x, my - c.y) < 45) {
+                c.activeMoveSnd = playSfx(sndMove); 
+                c.state = 'moving';
+            }
+        });
+    };
+
+    canvas.addEventListener('mousedown', handleInput);
+    canvas.addEventListener('touchstart', (e) => { handleInput(e); e.preventDefault(); }, {passive: false});
+    window.addEventListener('resize', resize);
+    
+    resize(); loop();
+</script>
+</body>
+</html>
